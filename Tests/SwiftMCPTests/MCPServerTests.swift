@@ -220,6 +220,47 @@ func testToolCallRequestWithError() async throws {
 }
 
 @Test
+func toolResultKeepsHumanAndStructuredContentSeparate() async throws {
+    let server = StructuredToolResultServer()
+    let request = JSONRPCMessage.request(
+        id: 5,
+        method: "tools/call",
+        params: ["name": "inspect", "arguments": .object([:])]
+    )
+
+    let message = try #require(await server.handleMessage(request))
+    guard case .response(let response) = message else {
+        throw TestError("Expected response case")
+    }
+    let result = try #require(response.result)
+
+    #expect(result["content"]?.value as? [[String: String]] == [["type": "text", "text": "human"]])
+    #expect(result["structuredContent"]?.value as? [String: String] == ["machine": "value"])
+    #expect(result["isError"]?.value as? Bool == false)
+}
+
+private final class StructuredToolResultServer: MCPServer, MCPToolProviding, @unchecked Sendable {
+    let serverName = "structured-test"
+    let serverVersion = "1"
+    let mcpToolMetadata = [
+        MCPToolMetadata(
+            name: "inspect",
+            parameters: [],
+            returnType: MCPToolResult.self,
+            isAsync: true,
+            isThrowing: true
+        ),
+    ]
+
+    func callTool(_: String, arguments _: JSONDictionary) async throws -> Encodable & Sendable {
+        MCPToolResult(
+            content: [MCPText("human")],
+            structuredContent: ["machine": "value"]
+        )
+    }
+}
+
+@Test
 func testToolCallRequestWithInvalidArgument() async throws {
     let calculator = Calculator()
     

@@ -1,5 +1,23 @@
 import Foundation
 
+/// A complete MCP tool result with independently controlled human-readable
+/// content and machine-readable structured content.
+public struct MCPToolResult: Codable, Sendable {
+    public let content: [MCPText]
+    public let structuredContent: JSONDictionary?
+    public let isError: Bool
+
+    public init(
+        content: [MCPText],
+        structuredContent: JSONDictionary? = nil,
+        isError: Bool = false
+    ) {
+        self.content = content
+        self.structuredContent = structuredContent
+        self.isError = isError
+    }
+}
+
 /// Optional annotations for tool content and resources.
 public struct MCPContentAnnotations: Codable, Sendable {
     public let audience: [String]?

@@ -393,6 +393,15 @@ public extension MCPServer {
                 "isError": false
             ]
 
+            if let toolResult = wrappedResult as? MCPToolResult {
+                resultPayload["content"] = try JSONValue(encoding: toolResult.content)
+                resultPayload["isError"] = .bool(toolResult.isError)
+                if let structuredContent = toolResult.structuredContent {
+                    resultPayload["structuredContent"] = .object(structuredContent)
+                }
+                return JSONRPCMessage.response(id: request.id, result: resultPayload)
+            }
+
             let expectsToolResult: Bool = {
                 guard let returnType = metadata?.returnType else {
                     return false
