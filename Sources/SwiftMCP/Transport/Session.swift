@@ -94,6 +94,37 @@ public actor Session {
     /// request is cancelled the moment it registers.
     private var pendingCancellations: Set<JSONRPCID> = []
 
+    /// Logical termination is separate from a resumable HTTP stream closing.
+    private var hasEnded = false
+    private var endObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
+
+    /// Observes this session's logical end. Each stream yields once and finishes;
+    /// subscribing after the end yields immediately. DELETE, expiry, transport
+    /// stop and explicit disconnect end HTTP sessions. A resumable socket close
+    /// does not. The event means request cancellation was signalled, not that
+    /// arbitrary tool or application cleanup has completed.
+    ///
+    /// Consume from a detached task if observation outlives a request, so the
+    /// task does not retain the request's `Session.current` task-local context.
+    public func ended() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        if hasEnded {
+            continuation.yield(())
+            continuation.finish()
+        } else {
+            let token = UUID()
+            endObservers[token] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task.detached { await self?.removeEndObserver(token) }
+            }
+        }
+        return stream
+    }
+
+    private func removeEndObserver(_ token: UUID) {
+        endObservers.removeValue(forKey: token)
+    }
+
     /// Marked once the client is disconnected (``Transport/disconnect(_:)``) —
     /// from any isolation, so that the session manager marks it before anything
     /// else of the disconnect, and every check sees it at once: a request that
@@ -362,6 +393,15 @@ public actor Session {
         for (id, cancel) in hooks {
             cancelledRequestIDs.insert(id)
             cancel()
+        }
+        if !hasEnded {
+            hasEnded = true
+            let observers = endObservers.values
+            endObservers = [:]
+            for observer in observers {
+                observer.yield(())
+                observer.finish()
+            }
         }
     }
 

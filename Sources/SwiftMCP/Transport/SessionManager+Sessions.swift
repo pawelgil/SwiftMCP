@@ -118,7 +118,12 @@ extension SessionManager {
         // (``createStream(for:kind:resumable:)``), not opened after the streams below are
         // removed and left open.
         let session = sessions.removeValue(forKey: sessionID)
+        // Logical removal closes admission before suspension, just like explicit
+        // disconnect. Admitted requests and late registration must be cancelled
+        // even while a tool's task-local retains the Session after removal.
+        session?.disconnection.mark()
         let streamIDs = Array(sessionStreams[sessionID] ?? [])
+        await session?.disconnectRequests()
         for streamID in streamIDs {
             await removeStream(id: streamID)
         }
