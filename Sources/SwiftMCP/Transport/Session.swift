@@ -307,20 +307,34 @@ public actor Session {
             preconditionFailure("Message requires an id")
         }
 
+        // A retained session must not park a new sampling/elicitation/request
+        // waiter after logical removal has performed its final response drain.
+        // This also closes admission while the manager's disconnection mark is
+        // set but its actor-hop cancellation/end-event work is still pending.
+        guard !disconnection.isMarked else { throw CancellationError() }
+
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONRPCMessage, Error>) in
             responses.register(messageId, continuation)
 
             // Send the message via the transport, activating the session context.
             Task {
                 do {
-                    try await self.work { _ in
-                        try await transport?.send(message)
-                    }
+                    try await self.sendRegisteredRequest(message)
                 } catch {
                     // A no-op if a reply already resolved this id.
                     _ = self.responses.fail(messageId, with: error)
                 }
             }
+        }
+    }
+
+    /// The deferred send stage rechecks logical admission: the session may have
+    /// ended and drained this waiter after registration but before this task ran.
+    /// Cancellation cannot retract a transport send which has already begun.
+    internal func sendRegisteredRequest(_ message: JSONRPCMessage) async throws {
+        try await self.work { _ in
+            guard !self.disconnection.isMarked else { throw CancellationError() }
+            try await transport?.send(message)
         }
     }
 
