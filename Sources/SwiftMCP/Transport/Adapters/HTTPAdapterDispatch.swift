@@ -25,14 +25,14 @@ final class HTTPAdapterDispatch: @unchecked Sendable {
         @TaskLocal static var capability: Capability?
     }
 
-    private final class State: @unchecked Sendable {
-        struct Record {
-            let task: Task<Void, Never>
-            let isRequest: Bool
-            let onJoined: @Sendable () -> Void
-            var bodyOpen = true
-        }
+    private struct Record {
+        let task: Task<Void, Never>
+        let isRequest: Bool
+        let onJoined: @Sendable () -> Void
+        var bodyOpen = true
+    }
 
+    private final class State: @unchecked Sendable {
         let id = UUID()
         let lock = NSLock()
         let completions: AsyncStream<UUID>.Continuation
@@ -165,7 +165,7 @@ final class HTTPAdapterDispatch: @unchecked Sendable {
             }
             let isRequest: Bool
             if case .request = admission { isRequest = true } else { isRequest = false }
-            state.records[capability.record] = State.Record(
+            state.records[capability.record] = Record(
                 task: task, isRequest: isRequest, onJoined: onJoined
             )
             return Operation(capability: capability, task: task)
@@ -239,46 +239,55 @@ enum HTTPAdapterRouteOperation {
         owner: HTTPAdapterDispatch,
         parent: HTTPAdapterDispatch.Capability,
         engine: any MCPHTTPEngine,
-        head: HTTPRequest,
-        body: AsyncStream<Data>,
+        request: (head: HTTPRequest, body: AsyncStream<Data>),
         writer: HTTPAdapterResponseWriter
     ) async {
-        let response = await engine.handle(head: head, bodyStream: body)
+        let response = await engine.handle(head: request.head, bodyStream: request.body)
         switch response.body {
         case .buffered:
             if case .failed = await writer.buffered(response) { await writer.close() }
-
-        case .sse(let stream, let registration):
-            let disposition = await writer.sseHead(response)
-            if case .written = disposition {
-                // Once live registration begins, await that same original call.
-                // Cancellation does not authorize a concurrent dead rebind.
-                if let registration,
-                   let token = await engine.registerConnection(writer.connection, for: registration) {
-                    let observer = owner.startCleanup(from: parent) { _ in
-                        await writer.closed()
-                        await engine.connectionDisconnected(token)
-                    }
-                    precondition(observer != nil, "live route lost descendant admission")
-                }
-                var writable = !Task.isCancelled
-                if writable {
-                    for await chunk in stream {
-                        if !(await writer.sseChunk(chunk)) { writable = false; break }
-                    }
-                }
-                if writable, !Task.isCancelled {
-                    if !(await writer.sseEnd()) { await writer.close() }
-                } else {
-                    await writer.close()
-                }
-            } else {
-                await reconcileDiscarded(response, engine: engine)
-                if case .failed = disposition { await writer.close() }
-            }
+        case .sse:
+            await sendSSE(response, owner: owner, parent: parent, engine: engine, writer: writer)
         }
         // This is awaited on every response disposition, including cancellation.
         await writer.finish()
+    }
+
+    private static func sendSSE(
+        _ response: EngineResponse,
+        owner: HTTPAdapterDispatch,
+        parent: HTTPAdapterDispatch.Capability,
+        engine: any MCPHTTPEngine,
+        writer: HTTPAdapterResponseWriter
+    ) async {
+        guard case .sse(let stream, let registration) = response.body else { return }
+        let disposition = await writer.sseHead(response)
+        if case .written = disposition {
+            // Once live registration begins, await that same original call.
+            // Cancellation does not authorize a concurrent dead rebind.
+            if let registration,
+               let token = await engine.registerConnection(writer.connection, for: registration) {
+                let observer = owner.startCleanup(from: parent) { _ in
+                    await writer.closed()
+                    await engine.connectionDisconnected(token)
+                }
+                precondition(observer != nil, "live route lost descendant admission")
+            }
+            var writable = !Task.isCancelled
+            if writable {
+                for await chunk in stream {
+                    guard await writer.sseChunk(chunk) else { writable = false; break }
+                }
+            }
+            if writable, !Task.isCancelled {
+                if !(await writer.sseEnd()) { await writer.close() }
+            } else {
+                await writer.close()
+            }
+        } else {
+            await reconcileDiscarded(response, engine: engine)
+            if case .failed = disposition { await writer.close() }
+        }
     }
 
     static func reconcileDiscarded(_ response: EngineResponse, engine: any MCPHTTPEngine) async {

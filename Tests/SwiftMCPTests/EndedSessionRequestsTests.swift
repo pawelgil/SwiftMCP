@@ -8,7 +8,7 @@ import Testing
 @Suite("Ended outbound session requests", .serialized, .timeLimit(.minutes(1)))
 struct EndedSessionRequestsTests {
     @Test
-    func `Live outbound requests still receive the matching in-memory reply`() async throws {
+    func `live outbound requests still receive the matching in-memory reply`() async throws {
         let session = Session(id: UUID())
         let transport = RespondingRequestTransport()
         await session.setTransport(transport)
@@ -19,7 +19,7 @@ struct EndedSessionRequestsTests {
     }
 
     @Test
-    func `Common removal refuses new raw send registration after the end event`() async throws {
+    func `common removal refuses new raw send registration after the end event`() async throws {
         let manager = SessionManager()
         let session = await manager.session(id: UUID())
         let transport = RespondingRequestTransport()
@@ -33,7 +33,7 @@ struct EndedSessionRequestsTests {
     }
 
     @Test
-    func `Explicit disconnect rejects request convenience calls and leaves a second session live`() async throws {
+    func `explicit disconnect rejects request convenience calls and leaves a second session live`() async throws {
         let manager = SessionManager()
         let ended = await manager.session(id: UUID())
         let live = await manager.session(id: UUID())
@@ -51,7 +51,7 @@ struct EndedSessionRequestsTests {
     }
 
     @Test
-    func `Expiry refuses a retained session's new outbound request`() async throws {
+    func `expiry refuses a retained session's new outbound request`() async throws {
         let manager = SessionManager()
         let session = await manager.session(id: UUID())
         let transport = RespondingRequestTransport()
@@ -64,7 +64,7 @@ struct EndedSessionRequestsTests {
     }
 
     @Test
-    func `The nonisolated removal mark closes outbound admission before its end-event actor hop`() async throws {
+    func `the nonisolated removal mark closes outbound admission before its end-event actor hop`() async throws {
         let session = Session(id: UUID())
         let transport = RespondingRequestTransport()
         await session.setTransport(transport)
@@ -78,7 +78,7 @@ struct EndedSessionRequestsTests {
     }
 
     @Test
-    func `An already parked waiter is drained and a later request cannot escape that final drain`() async throws {
+    func `an already parked waiter is drained and a later request cannot escape that final drain`() async throws {
         let manager = SessionManager()
         let session = await manager.session(id: UUID())
         let transport = RespondingRequestTransport(parkReplies: true)
@@ -98,7 +98,7 @@ struct EndedSessionRequestsTests {
 
     #if !EndedRequestsBaseline
     @Test
-    func `Deferred send released after removal is refused before transport invocation`() async throws {
+    func `deferred send released after removal is refused before transport invocation`() async throws {
         let manager = SessionManager()
         let session = await manager.session(id: UUID())
         let transport = RespondingRequestTransport()
@@ -128,9 +128,7 @@ struct EndedSessionRequestsTests {
 }
 
 private func isCancelled(_ action: @Sendable () async throws -> JSONRPCMessage) async -> Bool {
-    do { _ = try await action(); return false }
-    catch is CancellationError { return true }
-    catch { return false }
+    do { _ = try await action(); return false } catch is CancellationError { return true } catch { return false }
 }
 
 private func endedEventCount(_ events: AsyncStream<Void>) async -> Int {

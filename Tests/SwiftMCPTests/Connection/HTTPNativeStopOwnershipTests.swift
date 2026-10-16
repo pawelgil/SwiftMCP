@@ -141,7 +141,8 @@ struct HTTPNativeStopOwnershipTests {
             let socket = try TestTCPClient(port: UInt16(transport.port))
             cleanup.onRelease { socket.closeSocket() }
             await offPool {
-                socket.send("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+                socket.send("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                    + "Accept: application/json, text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
             }
             try await before.waitForArrival()
             await offPool { socket.send("11\r\n" + String(repeating: " ", count: 17) + "\r\n0\r\n\r\n") }

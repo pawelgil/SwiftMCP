@@ -28,16 +28,20 @@
 
                 let lateEnd = await fixture.observeEnd(session)
                 #expect(await lateEnd.value == 1)
-                let (_, removed) = try await fixture.client.data(for: fixture.request(.request(id: 3, method: "ping"), id: id))
+                let (_, removed) = try await fixture.client.data(for: fixture.request(
+                    .request(id: 3, method: "ping"), id: id
+                ))
                 #expect((removed as? HTTPURLResponse)?.statusCode == 404)
             }
         }
 
         @Test
-        func `Transport stop cancels all admitted sessions and emits each end once`() async throws {
+        func `transport stop cancels all admitted sessions and emits each end once`() async throws {
             try await withHTTPFixture { fixture in
                 let firstID = try await fixture.initialize()
-                let firstSession = try #require(await fixture.transport.sessionManager.existingSession(id: UUID(uuidString: firstID)!))
+                let firstSession = try #require(await fixture.transport.sessionManager.existingSession(
+                    id: UUID(uuidString: firstID)!
+                ))
                 let firstEnd = await fixture.observeEnd(firstSession)
                 let id = try await fixture.initialize()
                 let post = try await fixture.startHold(id)
@@ -57,20 +61,24 @@
         }
 
         @Test
-        func `Request cancellation leaves the session live and normal requests still respond`() async throws {
+        func `request cancellation leaves the session live and normal requests still respond`() async throws {
             try await withHTTPFixture { fixture in
                 let id = try await fixture.initialize()
                 let post = try await fixture.startHold(id)
                 #expect(await fixture.server.observation.waitForStart())
                 let session = try #require(await fixture.server.observation.session)
                 let end = await fixture.observeEnd(session)
-                let notification = JSONRPCMessage.notification(method: "notifications/cancelled", params: ["requestId": .integer(2)])
+                let notification = JSONRPCMessage.notification(
+                    method: "notifications/cancelled", params: ["requestId": .integer(2)]
+                )
                 let (_, accepted) = try await fixture.client.data(for: fixture.request(notification, id: id))
                 #expect((accepted as? HTTPURLResponse)?.statusCode == 202)
                 #expect(await fixture.server.observation.waitForFinish())
                 #expect(await fixture.server.observation.cancelled)
                 #expect(await post.value.responseIDs.isEmpty)
-                let (data, response) = try await fixture.client.data(for: fixture.request(.request(id: 3, method: "ping"), id: id))
+                let (data, response) = try await fixture.client.data(for: fixture.request(
+                    .request(id: 3, method: "ping"), id: id
+                ))
                 #expect((response as? HTTPURLResponse)?.statusCode == 200)
                 #expect(SessionRemovalHTTPReply(data: data, response: response).responseIDs == [3])
                 #expect(await fixture.transport.sessionManager.existingSession(id: session.id) === session)
@@ -80,7 +88,7 @@
         }
 
         @Test
-        func `Closing a resumable POST socket does not end or cancel its session`() async throws {
+        func `closing a resumable POST socket does not end or cancel its session`() async throws {
             try await withHTTPFixture { fixture in
                 let id = try await fixture.initialize()
                 let post = try await fixture.startHold(id)
@@ -99,7 +107,7 @@
         }
 
         @Test
-        func `Common destruction cancels late registration and refuses admitted work`() async {
+        func `common destruction cancels late registration and refuses admitted work`() async {
             let manager = SessionManager()
             let session = await manager.session(id: UUID())
             let end = await session.ended()
@@ -116,7 +124,7 @@
         }
 
         @Test
-        func `Expiry uses the same cancellation and replayable end event`() async {
+        func `expiry uses the same cancellation and replayable end event`() async {
             let manager = SessionManager()
             let session = await manager.session(id: UUID())
             let cancellation = SessionRemovalFlag()
@@ -129,7 +137,7 @@
         }
 
         @Test
-        func `Cancelling one end observer does not end the session or affect another`() async {
+        func `cancelling one end observer does not end the session or affect another`() async {
             let manager = SessionManager()
             let session = await manager.session(id: UUID())
             let first = await session.ended()
@@ -160,8 +168,7 @@
                 count += 1
             }; return count }
             group.addTask {
-                do { try await Task.sleep(for: .seconds(8)); return -1 }
-                catch { return 0 }
+                do { try await Task.sleep(for: .seconds(8)); return -1 } catch { return 0 }
             }
             defer { group.cancelAll() }
             return await group.next() ?? -1
@@ -229,7 +236,12 @@
     private struct SessionRemovalHTTPReply: Sendable {
         let responseIDs: [Int]
         init(data: Data, response _: URLResponse) {
-            responseIDs = String(decoding: data, as: UTF8.self).split(separator: "\n").compactMap { line in
+            guard let text = String(bytes: data, encoding: .utf8) else {
+                Issue.record("Session-removal HTTP response was not valid UTF-8")
+                responseIDs = []
+                return
+            }
+            responseIDs = text.split(separator: "\n").compactMap { line in
                 guard line.hasPrefix("data: "), let json = String(line.dropFirst(6)).data(using: .utf8),
                       let value = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
                       value["result"] != nil || value["error"] != nil else { return nil }
@@ -289,11 +301,15 @@
         }
 
         func startHold(_ id: String) throws -> Task<SessionRemovalHTTPReply, Never> {
-            let request = try request(.request(id: 2, method: "tools/call", params: ["name": .string("hold"), "arguments": .object([:])]), id: id)
+            let request = try request(.request(id: 2, method: "tools/call", params: [
+                "name": .string("hold"), "arguments": .object([:])
+            ]), id: id)
             let client = client
             let task = Task.detached {
-                do { let (data, response) = try await client.data(for: request); return SessionRemovalHTTPReply(data: data, response: response) }
-                catch { return SessionRemovalHTTPReply() }
+                do {
+                    let (data, response) = try await client.data(for: request)
+                    return SessionRemovalHTTPReply(data: data, response: response)
+                } catch { return SessionRemovalHTTPReply() }
             }
             posts.append(task)
             return task
