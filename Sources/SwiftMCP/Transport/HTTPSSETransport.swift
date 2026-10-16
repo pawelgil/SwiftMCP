@@ -53,9 +53,8 @@ public final class HTTPSSETransport: Transport, MCPTransport, Service, MCPHTTPEn
     /// Logger for logging transport events and errors.
     public let logger = Logger(label: "com.cocoanetics.SwiftMCP.HTTPSSETransport")
 
-    /// The socket adapter created in ``start()``. NIO (or any future framework)
-    /// lives entirely behind this; the engine never touches it directly.
-    private var adapter: NIOHTTPServerAdapter?
+    /// Retains starting/stopping adapter generations and their original tasks.
+    private let lifecycle = HTTPTransportLifecycle()
 
     public var streamRetentionInterval: TimeInterval = 5 * 60
     internal lazy var sessionManager = SessionManager(
@@ -159,26 +158,22 @@ public final class HTTPSSETransport: Transport, MCPTransport, Service, MCPHTTPEn
     // MARK: - Server Lifecycle
 
     public func start() async throws {
-        // Keyed off a successful bind: `self.adapter` is only ever a *bound*
-        // adapter. Assigning before binding would strand the previous adapter's
-        // listener (and its event-loop group) unreachable on a repeated start,
-        // while the new bind fails with EADDRINUSE against it.
-        guard self.adapter == nil else { return }
+        try await startHTTP(using: { NIOHTTPServerAdapter(engine: self, logger: self.logger) })
+    }
 
-        // Force the lazy router and session manager on this task, before any
-        // connection can race the non-atomic `lazy` check-then-store. Done here
-        // rather than in `init` because both are built from configuration set
-        // between `init` and `start()` (`serveOpenAPI`, custom routes,
-        // `streamRetentionInterval`).
-        _ = router
-        _ = sessionManager
-
-        let adapter = NIOHTTPServerAdapter(engine: self, logger: logger)
-        // Binding resolves an ephemeral `0` to the actual port. On failure the
-        // adapter has shut its own event-loop group down before rethrowing.
-        self.port = try await adapter.start()
-        self.adapter = adapter
-        startKeepAliveTimer()
+    /// Internal factory seam: tests exercise this same lifecycle without binding
+    /// a socket or allocating an event-loop group.
+    internal func startHTTP(using makeAdapter: @escaping @Sendable () -> any HTTPTransportAdapter) async throws {
+        try await lifecycle.start(
+            prepare: { _ = self.router; _ = self.sessionManager },
+            makeAdapter: makeAdapter,
+            didStart: { port in
+                self.port = port
+                if self.keepAliveMode != .none { self.startKeepAliveTimer() }
+            },
+            beforeDrain: { await self.prepareToDrainHTTP() },
+            afterDrain: { await self.sessionManager.removeAllSessions() }
+        )
     }
 
     /// Runs the transport and blocks until it is stopped.
@@ -190,7 +185,7 @@ public final class HTTPSSETransport: Transport, MCPTransport, Service, MCPHTTPEn
     public func run() async throws {
         try await start()
         try await withGracefulShutdownHandler {
-            try await adapter?.waitUntilClosed()
+            try await lifecycle.waitUntilClosed()
         } onGracefulShutdown: { [weak self] in
             // `onGracefulShutdown` is synchronous; bridge to the async `stop()`.
             Task { [weak self] in try? await self?.stop() }
@@ -198,15 +193,20 @@ public final class HTTPSSETransport: Transport, MCPTransport, Service, MCPHTTPEn
     }
 
     public func stop() async throws {
+        try await lifecycle.stop(
+            beforeDrain: { await self.prepareToDrainHTTP() },
+            afterDrain: { await self.sessionManager.removeAllSessions() }
+        )
+        logger.info("Server stopped")
+    }
+
+    private func prepareToDrainHTTP() async {
         logger.info("Stopping server...")
         stopKeepAliveTimer()
         await sessionManager.removeAllSessions()
-        // Cleared before the throwing shutdown: if shutdown throws, the adapter
-        // must not linger as if it were still serving.
-        let adapter = self.adapter
-        self.adapter = nil
-        try await adapter?.shutdown()
-        logger.info("Server stopped")
+        // Cancelling the timer does not join sendKeepAlive's outer Task or its
+        // nested ping Tasks. Those and MCPRoutes' inner batch producer remain
+        // separate from the narrowly scoped adapter-work join.
     }
 
     // MARK: - Transport
