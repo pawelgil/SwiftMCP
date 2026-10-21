@@ -358,12 +358,10 @@ public final class HTTPSSETransport: Transport, @unchecked Sendable {
     // MARK: - Handling SSE Connections
 
     /// Register a new SSE channel.
-    func registerSSEChannel(_ channel: Channel, id: UUID) {
-        Task {
-            await sessionManager.register(channel: channel, id: id)
-            let count = await sessionManager.channelCount
-            logger.info("New SSE channel registered (total: \(count))")
-        }
+    func registerSSEChannel(_ channel: Channel, id: UUID) async {
+        await sessionManager.register(channel: channel, id: id)
+        let count = await sessionManager.channelCount
+        logger.info("New SSE channel registered (total: \(count))")
 
         channel.closeFuture.whenComplete { [weak self] _ in
             guard let self = self else { return }
