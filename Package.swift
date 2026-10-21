@@ -112,7 +112,9 @@ let package = Package(
 			name: "SwiftMCPTests",
 			dependencies: [
 				"SwiftMCP",
+				"SwiftMCPMacros",
 				"SwiftMCPUtilityCore",
+				.product(name: "NIOEmbedded", package: "swift-nio"),
 				.product(name: "Crypto", package: "swift-crypto"),
 				.product(name: "_CryptoExtras", package: "swift-crypto"),
 				.product(name: "X509", package: "swift-certificates")

@@ -447,7 +447,7 @@ final class HTTPHandler: NSObject, ChannelInboundHandler, Identifiable, @uncheck
         }
     }
 
-    private func handleSSE(channel: Channel, head: HTTPRequestHead, body: ByteBuffer?, sendEndpoint: Bool = true) async {
+    func handleSSE(channel: Channel, head: HTTPRequestHead, body: ByteBuffer?, sendEndpoint: Bool = true) async {
         precondition(head.method == .GET)
 
         // Extract or generate session/client ID (they are the same thing)
@@ -499,11 +499,6 @@ final class HTTPHandler: NSObject, ChannelInboundHandler, Identifiable, @uncheck
             break
         }
         
-        // Register the channel with client ID
-        logger.info("Registering SSE channel for client \(sessionID)")
-        transport.registerSSEChannel(channel, id: sessionID)
-
-
         // Set up SSE response headers (ALWAYS send these for any SSE request)
         var headers = HTTPHeaders()
         headers.add(name: "Content-Type", value: "text/event-stream")
@@ -521,23 +516,32 @@ final class HTTPHandler: NSObject, ChannelInboundHandler, Identifiable, @uncheck
 									 status: .ok,
 									 headers: headers)
 
-        logger.info("Sending SSE response headers")
-        channel.write(HTTPServerResponsePart.head(response), promise: nil)
-        channel.flush()
+        do {
+            logger.info("Sending SSE response headers")
+            try await channel.writeAndFlush(HTTPServerResponsePart.head(response)).get()
 
-        // Conditionally send endpoint event (only for old protocol)
-        if sendEndpoint {
-            guard let endpointUrl = self.endpointUrl(from: head, sessionID: sessionID) else {
-                logger.error("Failed to construct endpoint URL")
-                channel.close(promise: nil)
-                return
+            if sendEndpoint {
+                guard let endpointUrl = self.endpointUrl(from: head, sessionID: sessionID) else {
+                    logger.error("Failed to construct endpoint URL")
+                    try? await channel.close().get()
+                    return
+                }
+
+                logger.info("Sending endpoint event with URL: \(endpointUrl)")
+                let message = SSEMessage(data: endpointUrl.absoluteString, eventName: "endpoint")
+                var buffer = channel.allocator.buffer(capacity: message.description.utf8.count)
+                buffer.writeString(message.description)
+                try await channel.writeAndFlush(HTTPServerResponsePart.body(.byteBuffer(buffer))).get()
             }
-
-            logger.info("Sending endpoint event with URL: \(endpointUrl)")
-            let message = SSEMessage(data: endpointUrl.absoluteString, eventName: "endpoint")
-            channel.sendSSE(message)
+        } catch {
+            logger.warning("Failed to initialize SSE response: \(error)")
+            try? await channel.close().get()
+            return
         }
 
+        guard channel.isActive else { return }
+        logger.info("Registering SSE channel for client \(sessionID)")
+        await transport.registerSSEChannel(channel, id: sessionID)
         logger.info("SSE connection setup complete for client \(sessionID)")
     }
 
